@@ -1,13 +1,37 @@
-version: 2
-
+version: 2.1
 jobs:
+  build-multi-arch:
+    parameters:
+      platform:
+        type: string
+    environment:
+      _JAVA_OPTIONS: "-Xms512m -Xmx1g"
+      DOCKER_CLI_EXPERIMENTAL: "enabled"
+    machine:
+      image: ubuntu-2004:202107-02
+    steps:
+      - checkout
+      - run: |
+         docker run --rm --privileged tonistiigi/binfmt:latest --install all
+         docker run --rm \
+           --platform << parameters.platform >> \
+           --name qemu-cross-<< parameters.platform >> \
+           --mount type=bind,source=${PWD},target=/github_workspace \
+           --workdir /github_workspace \
+           << parameters.platform >>/eclipse-temurin:11-jdk-focal uname -a; ./gradlew --no-daemon clean javadoc; ./gradlew --max-workers=1 --no-daemon analyze; ./gradlew --no-daemon -PmaxParallelForks=1 build
+      - run:
+          command: mkdir ~/test-results
+      - run:
+          command: find ~/workspace -type f -regex ".*/test-results/.*xml" -exec ln {} ~/test-results/ \;
+      - store_test_results:
+          path: ~/test-results
 
   build:
     environment:
       _JAVA_OPTIONS: "-Xms512m -Xmx1g"
     working_directory: ~/workspace
     docker:
-      - image: circleci/openjdk:11-jdk
+      - image: cimg/openjdk:11.0
     steps:
       - checkout
       - restore_cache:
@@ -34,10 +58,11 @@ jobs:
       - store_artifacts:
           path: build/libs
 
+
   publish:
     working_directory: ~/workspace
     docker:
-      - image: circleci/openjdk:11-jdk
+      - image: cimg/openjdk:11.0
     steps:
       - checkout
       - restore_cache:
@@ -46,9 +71,16 @@ jobs:
           command: ./gradlew :artifactoryPublish :cruise-control:artifactoryPublish :cruise-control-core:artifactoryPublish :cruise-control-metrics-reporter:artifactoryPublish
 
 workflows:
-  version: 2
+  version: 2.1
   build-and-publish:
     jobs:
+      - build-multi-arch:
+          matrix:
+            parameters:
+              platform: ["s390x"]
+          filters:
+            tags:
+              only: /.*/
       - build:
           filters:
             tags:
@@ -56,6 +88,7 @@ workflows:
       - publish:
           requires:
             - build
+            - build-multi-arch
           filters:
             branches:
               ignore: /.*/
